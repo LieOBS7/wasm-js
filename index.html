@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>QuickJS WASM Terminal</title>
+<link rel="stylesheet" href="https://unpkg.com/xterm/css/xterm.css" />
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #1e1e1e; }
+  #term { height: 100vh; }
+  .ready { color: #4ec9b0; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script type="module">
+import { Terminal } from 'https://unpkg.com/xterm/lib/xterm.js';
+import { WASI } from 'https://unpkg.com/@bjorn3/browser_wasi_shim/dist/index.js';
+
+const term = new Terminal({
+  fontSize: 14,
+  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
+  cursorBlink: true,
+});
+term.open(document.getElementById('term'));
+
+term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
+term.writeln('Loading quickjs.wasm ...');
+
+const wasmBytes = await fetch('./quickjs.wasm').then(r => r.arrayBuffer());
+term.writeln(`Loaded ${(wasmBytes.byteLength / 1024 / 1024).toFixed(2)} MB`);
+term.writeln('\x1b[32mReady.\x1b[0m');
+term.write('\x1b[33m> \x1b[0m');
+
+let inputBuf = '';
+let wasmCache = null;
+
+// 编译一次 wasm，反复 instantiate
+async function getModule() {
+  if (!wasmCache) {
+    wasmCache = await WebAssembly.compile(wasmBytes);
+  }
+  return wasmCache;
+}
+
+term.onData(c => {
+  if (c === '\r' || c === '\n') {
+    term.write('\r\n');
+    const line = inputBuf.trim();
+    inputBuf = '';
+
+    if (!line) {
+      term.write('\x1b[33m> \x1b[0m');
+      return;
+    }
+    if (line === 'exit' || line === '.exit') {
+      term.writeln('Bye.');
+      return;
+    }
+
+    // 把用户输入包成一段 JS：打印返回值
+    const code = `
+      try {
+        let __r = (${line});
+        if (typeof __r !== 'undefined') print(JSON.stringify(__r));
+      } catch(e) {
+        print(e.message || String(e));
+      }
+    `;
+
+    (async () => {
+      try {
+        const mod = await getModule();
+        const stdoutBuf = [];
+        const stderrBuf = [];
+
+        const wasi = new WASI({
+          args: ['quickjs', '-e', code],
+          env: { 'USER': 'wasm' },
+          stdout: {
+            write(buf) {
+              stdoutBuf.push(...new Uint8Array(buf));
+              return buf.length;
+            }
+          },
+          stderr: {
+            write(buf) {
+              stderrBuf.push(...new Uint8Array(buf));
+              return buf.length;
+            }
+          },
+          stdin: { read() { return -1; } }
+        });
+
+        const inst = await WebAssembly.instantiate(mod, {
+          wasi_snapshot_preview1: wasi.wasiImport,
+        });
+
+        wasi.start(inst);
+
+        if (stdoutBuf.length) {
+          term.write(new TextDecoder().decode(Uint8Array.from(stdoutBuf)) + '\r\n');
+        }
+        if (stderrBuf.length) {
+          term.write('\x1b[31m' + new TextDecoder().decode(Uint8Array.from(stderrBuf)) + '\x1b[0m\r\n');
+        }
+      } catch (e) {
+        term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
+      } finally {
+        term.write('\x1b[33m> \x1b[0m');
+      }
+    })();
+  } else if (c === '\x7f') {
+    if (inputBuf.length > 0) {
+      inputBuf = inputBuf.slice(0, -1);
+      term.write('\b \b');
+    }
+  } else {
+    inputBuf += c;
+    term.write(c);
+  }
+});
+</script>
+</body>
+</html>
