@@ -1,156 +1,92 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html>
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>QuickJS WASM Terminal</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { height:100%; background:#1e1e1e; overflow:hidden; }
-  #term { width:100vw; height:calc(100vh - 96px); }
-  #input-row {
-    position:fixed; bottom:0; left:0; right:0; height:52px;
-    display:flex; background:#2d2d2d; border-top:1px solid #444;
-  }
-  #input-bar {
-    flex:1; height:100%; background:transparent; border:none;
-    color:#d4d4d4; font-family:Menlo,Monaco,monospace; font-size:16px;
-    padding:0 12px; outline:none; -webkit-appearance:none; border-radius:0;
-  }
-  #input-bar::placeholder { color:#888; }
-  #run-btn {
-    width:72px; height:100%; background:#0e639c; border:none;
-    color:#fff; font-size:15px; font-weight:bold; cursor:pointer;
-    flex-shrink:0;
-  }
-  #run-btn:active { background:#1177bb; }
+  body { margin:0; background:#1e1e1e; color:#d4d4d4; font-family:Menlo,Monaco,monospace; height:100vh; display:flex; flex-direction:column; }
+  #term { flex:1; padding:8px; overflow:hidden; }
+  .bottom { display:flex; height:52px; background:#2d2d2d; border-top:1px solid #444; }
+  #input-bar { flex:1; background:transparent; border:none; color:#d4d4d4; font-size:16px; padding:0 12px; outline:none; }
+  #run-btn { width:72px; background:#007acc; color:#fff; border:none; font-size:16px; cursor:pointer; }
 </style>
 </head>
 <body>
 <div id="term"></div>
-<div id="input-row">
-  <input id="input-bar" type="text" placeholder="输入 JS 代码" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
+<div class="bottom">
+  <input id="input-bar" type="text" placeholder="输入 JS 代码" autocomplete="off" autofocus />
   <button id="run-btn">执行</button>
 </div>
 
-<script>
-// 不用 type="module"，动态加载，确保按钮事件一定绑上
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script type="module">
+import { WASI, OpenFile, File, ConsoleStdout, PreopenDirectory } from 'https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js';
+
+const term = new Terminal({
+  fontSize: 14, fontFamily: 'Menlo, Monaco, monospace',
+  theme: { background:'#1e1e1e', foreground:'#d4d4d4' },
+  cursorBlink: true, disableStdin: true,
+});
+term.open(document.getElementById('term'));
 const inputBar = document.getElementById('input-bar');
 const runBtn = document.getElementById('run-btn');
-const termDiv = document.getElementById('term');
 
-// 先初始化终端（不依赖 import）
-let term = null;
-let TerminalClass = null;
+term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
+term.writeln('Loading quickjs.wasm ...');
 
-// 动态加载 xterm
-const script = document.createElement('script');
-script.src = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
-script.onload = function() {
-  // xterm 加载完，初始化终端
-  term = new window.Terminal({
-    fontSize: 14,
-    fontFamily: 'Menlo, Monaco, monospace',
-    theme: { background:'#1e1e1e', foreground:'#d4d4d4' },
-    cursorBlink: true,
-    disableStdin: true,
-  });
-  term.open(termDiv);
-  term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
-  term.writeln('Loading quickjs.wasm ...');
-  initWasm();
-};
-script.onerror = function() {
-  alert('xterm 加载失败');
-};
-document.head.appendChild(script);
+const wasmBytes = await fetch('./quickjs.wasm').then(r => {
+  if (!r.ok) throw new Error('quickjs.wasm not found (' + r.status + ')');
+  return r.arrayBuffer();
+});
+term.writeln('Loaded ' + Math.round(wasmBytes.byteLength/1024) + ' KB');
+term.writeln('\x1b[32mCompiling...\x1b[0m');
+const wasmModule = await WebAssembly.compile(wasmBytes);
+term.writeln('\x1b[32mReady. 输入 JS 点执行.\x1b[0m');
+term.write('\x1b[33m> \x1b[0m');
 
-let wasmModule = null;
-
-async function initWasm() {
-  try {
-    const r = await fetch('./quickjs.wasm');
-    if (!r.ok) { term.writeln('FAIL: wasm 404'); return; }
-    const bytes = await r.arrayBuffer();
-    term.writeln('Loaded ' + Math.round(bytes.byteLength/1024) + ' KB');
-    term.writeln('\x1b[32mCompiling...\x1b[0m');
-    wasmModule = await WebAssembly.compile(bytes);
-    term.writeln('\x1b[32mReady. 输入 JS 点执行.\x1b[0m');
-    term.write('\x1b[33m> \x1b[0m');
-  } catch(e) {
-    term.writeln('\x1b[31m' + e.message + '\x1b[0m');
-  }
-}
-
-// ===== 执行函数 =====
 async function runCode() {
-  alert('runCode 被调用了'); // 测试用，确认能进来
   const line = inputBar.value.trim();
-  if (!line) { if(term) term.write('\x1b[33m> \x1b[0m'); return; }
-  if (line === 'exit') { if(term) term.writeln('Bye.'); return; }
+  if (!line) { term.write('\x1b[33m> \x1b[0m'); return; }
+  if (line === 'exit') { term.writeln('Bye.'); return; }
 
-  if (!term) { alert('终端没初始化'); return; }
   term.write('\x1b[33m> \x1b[0m' + line + '\r\n');
   inputBar.value = '';
-
-  if (!wasmModule) {
-    term.write('\x1b[31mwasm 还没编译完\x1b[0m\r\n');
-    return;
-  }
+  term.write('Executing...\r\n');
 
   try {
-    term.write('Executing...\r\n');
-
-    // 动态加载 WASI
-    const wasiMod = await import('https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js');
-    const WASI = wasiMod.WASI;
-
-    const decoder = new TextDecoder();
     let output = '';
-
-    const wasi = new WASI({
-      args: ['quickjs', '-e', line],
-      env: {},
-      stdout: { write(buf) { output += decoder.decode(buf); return buf.length; } },
-      stderr: { write(buf) { output += '\x1b[31m' + decoder.decode(buf) + '\x1b[0m'; return buf.length; } },
-      stdin: { read() { return -1; } },
-    });
+    const decoder = new TextDecoder();
+    // ✅ 修复点：传 3 个参数，不再是对象
+    const args = ['quickjs', '-e', line];
+    const env = [];
+    const fds = [
+      new OpenFile(new File([])), // stdin
+      ConsoleStdout.lineBuffered(s => { output += s; }), // stdout
+      ConsoleStdout.lineBuffered(s => { output += '\x1b[31m' + s + '\x1b[0m'; }), // stderr
+      new PreopenDirectory(".", []),
+    ];
+    const wasi = new WASI(args, env, fds);
 
     const instance = await WebAssembly.instantiate(wasmModule, {
       wasi_snapshot_preview1: wasi.wasiImport,
     });
+    wasi.start(instance);
 
-    if (instance.exports._start) {
-      wasi.start(instance);
-    }
-
-    if (output) {
-      term.write(output + '\r\n');
-    } else {
-      term.write('(no output)\r\n');
-    }
+    if (output) term.write(output + '\r\n');
+    else term.write('(no output)\r\n');
   } catch(e) {
     term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
   }
   term.write('\x1b[33m> \x1b[0m');
 }
 
-// 按钮事件 - 直接绑，不用等任何东西
-runBtn.addEventListener('click', function() {
-  runCode();
-});
-
-// 回车事件
-inputBar.addEventListener('keydown', function(e) {
+runBtn.addEventListener('click', () => { runCode(); });
+inputBar.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); runCode(); }
 });
-
-// 点终端聚焦输入框
-termDiv.addEventListener('click', function() { inputBar.focus(); });
-document.addEventListener('touchstart', function() { inputBar.focus(); }, { passive:true });
-
-setTimeout(function() { inputBar.focus(); }, 300);
+document.getElementById('term').addEventListener('click', () => inputBar.focus());
+setTimeout(() => inputBar.focus(), 300);
 </script>
 </body>
 </html>
