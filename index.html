@@ -8,21 +8,33 @@
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html, body { height:100%; background:#1e1e1e; overflow:hidden; }
-  #term { width:100vw; height:calc(100vh - 52px); }
-  #input-bar {
+  #term { width:100vw; height:calc(100vh - 96px); }
+  #input-row {
     position:fixed; bottom:0; left:0; right:0; height:52px;
-    background:#2d2d2d; border:none; border-top:1px solid #444;
+    display:flex; background:#2d2d2d; border-top:1px solid #444;
+  }
+  #input-bar {
+    flex:1; height:100%; background:transparent; border:none;
     color:#d4d4d4; font-family:Menlo,Monaco,monospace; font-size:16px;
     padding:0 12px; outline:none; -webkit-appearance:none; border-radius:0;
   }
   #input-bar::placeholder { color:#888; }
+  #run-btn {
+    width:72px; height:100%; background:#0e639c; border:none;
+    color:#fff; font-size:15px; font-weight:bold; cursor:pointer;
+    flex-shrink:0;
+  }
+  #run-btn:active { background:#1177bb; }
   .xterm-helper-textarea { opacity:0 !important; }
 </style>
 </head>
 <body>
 
 <div id="term"></div>
-<input id="input-bar" type="text" placeholder="输入 JS 代码，回车执行" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
+<div id="input-row">
+  <input id="input-bar" type="text" placeholder="输入 JS 代码" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
+  <button id="run-btn">执行</button>
+</div>
 
 <script type="module">
 import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
@@ -38,6 +50,7 @@ const term = new Terminal({
 term.open(document.getElementById('term'));
 
 const inputBar = document.getElementById('input-bar');
+const runBtn = document.getElementById('run-btn');
 
 term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
 term.writeln('Loading quickjs.wasm ...');
@@ -56,18 +69,14 @@ async function getModule() {
   return wasmCache;
 }
 
-// 点击终端区域时把焦点还给 input
-document.getElementById('term').addEventListener('click', () => inputBar.focus());
-document.addEventListener('touchstart', () => inputBar.focus(), { passive:true });
-
-inputBar.addEventListener('keydown', async (e) => {
-  if (e.key !== 'Enter') return;
+// 核心执行函数，回车和按钮共用
+async function runCode() {
   const line = inputBar.value.trim();
-  inputBar.value = '';
   if (!line) { term.write('\x1b[33m> \x1b[0m'); return; }
   if (line === 'exit' || line === '.exit') { term.writeln('Bye.'); return; }
 
   term.write('\x1b[33m> \x1b[0m' + line + '\r\n');
+  inputBar.value = '';
 
   try {
     const mod = await getModule();
@@ -76,10 +85,10 @@ inputBar.addEventListener('keydown', async (e) => {
     const wasi = new WASI({
       args: ['quickjs', '-e', `
         try {
-          let __r = (${line});
-          if (typeof __r !== 'undefined') print(JSON.stringify(__r));
+          let __r = (${line})
+          if (typeof __r !== 'undefined') print(JSON.stringify(__r))
         } catch(e) {
-          print(e.message || String(e));
+          print(e.message || String(e))
         }
       `],
       env: {},
@@ -98,7 +107,19 @@ inputBar.addEventListener('keydown', async (e) => {
     term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
   }
   term.write('\x1b[33m> \x1b[0m');
+}
+
+// 回车执行
+inputBar.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runCode(); }
 });
+
+// 按钮点击执行
+runBtn.addEventListener('click', () => { runCode(); });
+
+// 点终端区域聚焦输入框
+document.getElementById('term').addEventListener('click', () => inputBar.focus());
+document.addEventListener('touchstart', () => inputBar.focus(), { passive:true });
 
 // 自动弹键盘
 setTimeout(() => inputBar.focus(), 300);
