@@ -1,86 +1,65 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html>
 <head>
 <meta charset="UTF-8" />
-<title>QuickJS Debug</title>
-<style>
-  html, body { margin:0; padding:10px; background:#1e1e1e; color:#d4d4d4; font-family: monospace; font-size:14px; }
-  .ok { color:#4ec9b0; }
-  .err { color:#f44747; }
-  .info { color:#569cd6; }
-  .step { margin:5px 0; }
-</style>
+<title>Debug 2</title>
 </head>
-<body>
-<div id="log"></div>
-
+<body style="background:#1e1e1e;color:#d4d4d4;font-family:monospace;padding:20px;">
+<div id="out"></div>
 <script>
-function log(msg, cls) {
-  const d = document.createElement('div');
-  d.className = 'step ' + (cls || '');
-  d.textContent = msg;
-  document.getElementById('log').appendChild(d);
-  window.scrollTo(0, document.body.scrollHeight);
+function out(msg) {
+  document.getElementById('out').innerHTML += msg + '<br>';
 }
 
-log('Step 1: 页面加载完成', 'info');
+out('1. 开始 fetch quickjs.wasm');
 
-// 检查 quickjs.wasm 能不能访问到
-fetch('./quickjs.wasm').then(r => {
-  if (!r.ok) {
-    log('Step 2 FAIL: quickjs.wasm 404，文件不存在或路径不对 (status: ' + r.status + ')', 'err');
-    return;
-  }
-  log('Step 2 OK: quickjs.wasm 找到了，size=' + r.headers.get('content-length') + ' bytes', 'ok');
+fetch('./quickjs.wasm').then(function(r) {
+  out('2. fetch 返回 status=' + r.status);
+  if (!r.ok) { out('FAIL: 404'); return; }
   return r.arrayBuffer();
-}).then(bytes => {
+}).then(function(bytes) {
   if (!bytes) return;
-  log('Step 3 OK: wasm 下载完成，' + (bytes.byteLength/1024/1024).toFixed(2) + ' MB', 'ok');
+  out('3. bytes length=' + bytes.byteLength);
   
-  // 检查 WebAssembly 支不支持
-  if (typeof WebAssembly === 'undefined') {
-    log('Step 4 FAIL: 浏览器不支持 WebAssembly', 'err');
-    return;
+  // 检查魔数
+  var view = new Uint8Array(bytes, 0, 4);
+  out('4. 魔数: ' + view[0] + ' ' + view[1] + ' ' + view[2] + ' ' + view[3]);
+  
+  // 同步 try-catch 包 compile
+  try {
+    out('5. 开始 WebAssembly.compile...');
+    WebAssembly.compile(bytes).then(function(mod) {
+      out('6. compile 成功! module=' + mod);
+      out('现在加载终端...');
+      // 成功后才加载 xterm
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
+      s.onload = function() {
+        out('xterm loaded, 创建终端');
+        document.getElementById('out').innerHTML = '';
+        var d = document.createElement('div');
+        d.id = 'term';
+        d.style.cssText = 'width:100vw;height:100vh;position:fixed;top:0;left:0;';
+        document.body.appendChild(d);
+        var term = new (window.Terminal || window.xterm.Terminal)({
+          fontSize: 14, fontFamily: 'monospace',
+          theme: { background:'#1e1e1e', foreground:'#d4d4d4' }, cursorBlink: true
+        });
+        term.open(d);
+        term.focus();
+        term.writeln('QuickJS WASM OK!');
+        term.write('> ');
+      };
+      s.onerror = function() { out('FAIL: xterm 加载失败'); };
+      document.head.appendChild(s);
+    }).catch(function(e) {
+      out('FAIL: compile Promise reject: ' + e.message);
+    });
+  } catch(e) {
+    out('FAIL: compile 同步报错: ' + e.message);
   }
-  log('Step 4 OK: WebAssembly 支持正常', 'ok');
-  
-  // 尝试编译
-  return WebAssembly.compile(bytes);
-}).then(module => {
-  if (!module) return;
-  log('Step 5 OK: wasm 编译成功', 'ok');
-  log('--- 全部检查通过，现在加载终端 UI ---', 'info');
-  
-  // 动态加载 xterm
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css';
-  document.head.appendChild(link);
-  
-  // 创建终端容器
-  document.getElementById('log').innerHTML = '';
-  const termDiv = document.createElement('div');
-  termDiv.id = 'term';
-  termDiv.style.cssText = 'width:100vw;height:100vh;position:fixed;top:0;left:0;';
-  document.body.innerHTML = '';
-  document.body.appendChild(termDiv);
-  
-  // 动态 import xterm
-  import('https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js').then(m => {
-    const { Terminal } = m;
-    const term = new Terminal({ fontSize:14, fontFamily:'monospace', theme:{background:'#1e1e1e',foreground:'#d4d4d4'}, cursorBlink:true });
-    term.open(termDiv);
-    term.focus();
-    term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
-    term.writeln('Ready. Type JS and press Enter.');
-    term.write('\x1b[33m> \x1b[0m');
-    log('终端启动成功', 'ok');
-  }).catch(e => {
-    log('xterm 加载失败: ' + e.message, 'err');
-  });
-  
-}).catch(e => {
-  log('Step FAIL: ' + e.message, 'err');
+}).catch(function(e) {
+  out('FAIL: fetch 报错: ' + e.message);
 });
 </script>
 </body>
