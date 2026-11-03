@@ -1,128 +1,38 @@
 <!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
-<title>QuickJS WASM Terminal</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
-<style>
-  * { margin:0; padding:0; box-sizing:border-box; }
-  html, body { height:100%; background:#1e1e1e; overflow:hidden; }
-  #term { width:100vw; height:calc(100vh - 96px); }
-  #input-row {
-    position:fixed; bottom:0; left:0; right:0; height:52px;
-    display:flex; background:#2d2d2d; border-top:1px solid #444;
-  }
-  #input-bar {
-    flex:1; height:100%; background:transparent; border:none;
-    color:#d4d4d4; font-family:Menlo,Monaco,monospace; font-size:16px;
-    padding:0 12px; outline:none; -webkit-appearance:none; border-radius:0;
-  }
-  #input-bar::placeholder { color:#888; }
-  #run-btn {
-    width:72px; height:100%; background:#0e639c; border:none;
-    color:#fff; font-size:15px; font-weight:bold; cursor:pointer;
-    flex-shrink:0;
-  }
-  #run-btn:active { background:#1177bb; }
-  .xterm-helper-textarea { opacity:0 !important; }
-</style>
-</head>
-<body>
-
-<div id="term"></div>
-<div id="input-row">
-  <input id="input-bar" type="text" placeholder="输入 JS 代码" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus />
-  <button id="run-btn">执行</button>
-</div>
-
+<html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/></head>
+<body style="background:#1e1e1e;color:#fff;font-family:monospace;padding:20px;">
+<div id="log"></div>
+<input id="i" type="text" placeholder="JS代码" style="width:70%;font-size:16px;padding:8px;" />
+<button id="b" style="width:25%;font-size:16px;padding:8px;">执行</button>
 <script type="module">
-import { Terminal } from 'https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js';
-import { WASI } from 'https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js';
+document.getElementById('log').innerHTML = '脚本开始加载<br>';
 
-const term = new Terminal({
-  fontSize: 14,
-  fontFamily: 'Menlo, Monaco, monospace',
-  theme: { background:'#1e1e1e', foreground:'#d4d4d4' },
-  cursorBlink: true,
-  disableStdin: true,
-});
-term.open(document.getElementById('term'));
-
-const inputBar = document.getElementById('input-bar');
-const runBtn = document.getElementById('run-btn');
-
-term.writeln('\x1b[36mQuickJS WASM Terminal\x1b[0m');
-term.writeln('Loading quickjs.wasm ...');
-
-const wasmBytes = await fetch('./quickjs.wasm').then(r => {
-  if (!r.ok) throw new Error('quickjs.wasm not found (' + r.status + ')');
-  return r.arrayBuffer();
-});
-term.writeln('Loaded ' + (wasmBytes.byteLength/1024/1024).toFixed(2) + ' MB');
-term.writeln('\x1b[32mReady.\x1b[0m');
-term.write('\x1b[33m> \x1b[0m');
-
-let wasmCache = null;
-async function getModule() {
-  if (!wasmCache) wasmCache = await WebAssembly.compile(wasmBytes);
-  return wasmCache;
-}
-
-// 核心执行函数，回车和按钮共用
-async function runCode() {
-  const line = inputBar.value.trim();
-  if (!line) { term.write('\x1b[33m> \x1b[0m'); return; }
-  if (line === 'exit' || line === '.exit') { term.writeln('Bye.'); return; }
-
-  term.write('\x1b[33m> \x1b[0m' + line + '\r\n');
-  inputBar.value = '';
-
-  try {
-    const mod = await getModule();
-    const out = [];
-    const err = [];
-    const wasi = new WASI({
-      args: ['quickjs', '-e', `
-        try {
-          let __r = (${line})
-          if (typeof __r !== 'undefined') print(JSON.stringify(__r))
-        } catch(e) {
-          print(e.message || String(e))
-        }
-      `],
-      env: {},
-      stdout: { write(b){ out.push(...new Uint8Array(b)); return b.length; } },
-      stderr: { write(b){ err.push(...new Uint8Array(b)); return b.length; } },
-      stdin: { read(){ return -1; } },
-    });
-    const inst = await WebAssembly.instantiate(mod, {
-      wasi_snapshot_preview1: wasi.wasiImport,
-    });
-    wasi.start(inst);
-
-    if (out.length) term.write(new TextDecoder().decode(Uint8Array.from(out)) + '\r\n');
-    if (err.length) term.write('\x1b[31m' + new TextDecoder().decode(Uint8Array.from(err)) + '\x1b[0m\r\n');
-  } catch (e) {
-    term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
-  }
-  term.write('\x1b[33m> \x1b[0m');
-}
-
-// 回车执行
-inputBar.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); runCode(); }
+// 测试1: xterm 能不能加载
+import('https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js').then(m => {
+  document.getElementById('log').innerHTML += 'xterm OK<br>';
+}).catch(e => {
+  document.getElementById('log').innerHTML += 'xterm FAIL: ' + e.message + '<br>';
 });
 
-// 按钮点击执行
-runBtn.addEventListener('click', () => { runCode(); });
+// 测试2: browser_wasi_shim 能不能加载
+import('https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js').then(m => {
+  document.getElementById('log').innerHTML += 'WASI OK, keys: ' + Object.keys(m).join(',') + '<br>';
+}).catch(e => {
+  document.getElementById('log').innerHTML += 'WASI FAIL: ' + e.message + '<br>';
+});
 
-// 点终端区域聚焦输入框
-document.getElementById('term').addEventListener('click', () => inputBar.focus());
-document.addEventListener('touchstart', () => inputBar.focus(), { passive:true });
+// 测试3: wasm 能不能 fetch
+fetch('./quickjs.wasm').then(r => {
+  document.getElementById('log').innerHTML += 'wasm fetch status=' + r.status + ' size=' + r.headers.get('content-length') + '<br>';
+}).catch(e => {
+  document.getElementById('log').innerHTML += 'wasm fetch FAIL: ' + e.message + '<br>';
+});
 
-// 自动弹键盘
-setTimeout(() => inputBar.focus(), 300);
+document.getElementById('b').addEventListener('click', () => {
+  alert('按钮被点了！输入内容: ' + document.getElementById('i').value);
+  document.getElementById('log').innerHTML += '按钮点击，输入=' + document.getElementById('i').value + '<br>';
+});
 </script>
 </body>
 </html>
