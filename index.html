@@ -21,7 +21,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script type="module">
-import { WASI, OpenFile, File, ConsoleStdout, PreopenDirectory } from 'https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js';
+import { WASI, OpenFile, File, ConsoleStdout } from 'https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim/dist/index.min.js';
 
 const term = new Terminal({
   fontSize: 14, fontFamily: 'Menlo, Monaco, monospace',
@@ -52,20 +52,31 @@ async function runCode() {
 
   term.write('\x1b[33m> \x1b[0m' + line + '\r\n');
   inputBar.value = '';
-  term.write('Executing...\r\n');
 
   try {
     let output = '';
-    const decoder = new TextDecoder();
-    // ✅ 修复点：传 3 个参数，不再是对象
+    const decoder = new TextDecoder('utf-8');
+
+    // stdout 回调：只在有实际文本时才收集
+    const fds = [
+      new OpenFile(new File([])),
+      ConsoleStdout.lineBuffered((buf) => {
+        // 过滤掉非打印字符（ASCII < 32 且不是 \n \r \t）
+        const filtered = new Uint8Array(buf.filter(b => b >= 32 || b === 10 || b === 13 || b === 9));
+        if (filtered.length > 0) {
+          output += decoder.decode(filtered);
+        }
+      }),
+      ConsoleStdout.lineBuffered((buf) => {
+        const filtered = new Uint8Array(buf.filter(b => b >= 32 || b === 10 || b === 13 || b === 9));
+        if (filtered.length > 0) {
+          output += decoder.decode(filtered);
+        }
+      }),
+    ];
+
     const args = ['quickjs', '-e', line];
     const env = [];
-    const fds = [
-      new OpenFile(new File([])), // stdin
-      ConsoleStdout.lineBuffered(s => { output += s; }), // stdout
-      ConsoleStdout.lineBuffered(s => { output += '\x1b[31m' + s + '\x1b[0m'; }), // stderr
-      new PreopenDirectory(".", []),
-    ];
     const wasi = new WASI(args, env, fds);
 
     const instance = await WebAssembly.instantiate(wasmModule, {
@@ -73,8 +84,9 @@ async function runCode() {
     });
     wasi.start(instance);
 
-    if (output) term.write(output + '\r\n');
-    else term.write('(no output)\r\n');
+    if (output) {
+      term.write(output + '\r\n');
+    }
   } catch(e) {
     term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
   }
