@@ -57,22 +57,24 @@ async function runCode() {
     let output = '';
     const decoder = new TextDecoder('utf-8');
 
-    // stdout 回调：只在有实际文本时才收集
+    // ✅ 修复：不再使用 buf.filter，直接安全解码
     const fds = [
-      new OpenFile(new File([])),
-      ConsoleStdout.lineBuffered((buf) => {
-        // 过滤掉非打印字符（ASCII < 32 且不是 \n \r \t）
-        const filtered = new Uint8Array(buf.filter(b => b >= 32 || b === 10 || b === 13 || b === 9));
-        if (filtered.length > 0) {
-          output += decoder.decode(filtered);
+      new OpenFile(new File([])), // stdin (0)
+      ConsoleStdout.lineBuffered((msg) => { 
+        // msg 可能是 Uint8Array 或字符串，统一转字符串
+        if (typeof msg === 'string') {
+          output += msg;
+        } else {
+          output += decoder.decode(msg);
         }
-      }),
-      ConsoleStdout.lineBuffered((buf) => {
-        const filtered = new Uint8Array(buf.filter(b => b >= 32 || b === 10 || b === 13 || b === 9));
-        if (filtered.length > 0) {
-          output += decoder.decode(filtered);
+      }), // stdout (1)
+      ConsoleStdout.lineBuffered((msg) => { 
+        if (typeof msg === 'string') {
+          output += '\x1b[31m' + msg + '\x1b[0m';
+        } else {
+          output += '\x1b[31m' + decoder.decode(msg) + '\x1b[0m';
         }
-      }),
+      }), // stderr (2)
     ];
 
     const args = ['quickjs', '-e', line];
@@ -82,10 +84,13 @@ async function runCode() {
     const instance = await WebAssembly.instantiate(wasmModule, {
       wasi_snapshot_preview1: wasi.wasiImport,
     });
+    
     wasi.start(instance);
 
     if (output) {
       term.write(output + '\r\n');
+    } else {
+      term.write('(no output)\r\n');
     }
   } catch(e) {
     term.write('\x1b[31m' + e.message + '\x1b[0m\r\n');
@@ -99,6 +104,6 @@ inputBar.addEventListener('keydown', (e) => {
 });
 document.getElementById('term').addEventListener('click', () => inputBar.focus());
 setTimeout(() => inputBar.focus(), 300);
-</script>
+  </script>
 </body>
 </html>
